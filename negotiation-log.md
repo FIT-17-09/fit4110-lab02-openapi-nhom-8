@@ -1,100 +1,145 @@
 # Biên bản đàm phán hợp đồng API
 
-- Cặp đàm phán: 5 (IoT Ingestion → Core Business)
-- Product: Smart Campus Operations Platform
-- Provider: IoT Ingestion (Nhóm A1/B1)
-- Consumer: Core Business (Nhóm A6/B6)
+- Provider: IoT Ingestion (B1)
 - Phiên: v1.0
 - Ngày: 2026-05-18
 
----
-
-## Issue #1
-
-- Raised by: Consumer (Core Business)
-- Endpoint: Topic `sensor.reading.created`
-- Concern: Core Business cần biết đơn vị đo lường (độ C, % độ ẩm) để so sánh với các ngưỡng (threshold) cấu hình trong database, tránh việc so sánh sai logic.
-- Proposal: Phía Consumer đề xuất Provider gửi kèm trường `unit` trong payload, thay vì Consumer phải tự hardcode ánh xạ theo `sensorType`.
-- Resolution: Accepted
-- Rationale: Việc Provider gửi kèm `unit` giúp decouple logic, Consumer không cần biết quá nhiều về phần cứng thiết bị. Dữ liệu mang tính self-explanatory (tự giải thích) cao hơn.
-- Impact: Cập nhật payload tối thiểu, bổ sung trường `unit` (ví dụ: `"unit": "Celsius"`).
+> Mỗi cặp đàm phán độc lập. Pair 05 đàm phán với Core Business (B6); Pair 06 đàm phán với Analytics (B5).
 
 ---
 
-## Issue #2
+# PHẦN A — Pair 05 (IoT Ingestion → Core Business)
 
-- Raised by: Consumer (Core Business)
-- Endpoint: Topic `sensor.reading.created`
-- Concern: Khi có cảnh báo (ví dụ cháy), Core Business cần biết vị trí cụ thể để kích hoạt chuông báo động ở khu vực đó, nhưng hiện tại payload thô chỉ có `deviceId`.
-- Proposal: Yêu cầu IoT Ingestion gửi thêm `zoneId` (Khu vực) vào event data.
-- Resolution: Accepted
-- Rationale: Mặc dù Core Business có thể query database để tìm `zoneId` từ `deviceId`, nhưng việc này gây overhead (tốn tài nguyên query DB liên tục với hàng ngàn event/giây). Việc IoT Ingestion đính kèm sẵn `zoneId` từ lúc ingest dữ liệu giúp tăng tốc độ xử lý realtime.
-- Impact: Payload bổ sung trường `"zoneId": "zone-building-A-floor-3"`.
+- Consumer: Core Business (B6)
+- Trạng thái: **Đã chốt**
 
----
-
-## Issue #3
+## Issue #1 — Tên event không thống nhất
 
 - Raised by: Provider (IoT Ingestion)
-- Endpoint: Topic `sensor.reading.created`
-- Concern: Do tính chất mạng không ổn định từ các gateway IoT, Provider có thể retry gửi lại một event nhiều lần (At-least-once delivery), dẫn đến việc queue nhận được nhiều message trùng lặp.
-- Proposal: Consumer phải tự xử lý luỹ đẳng (Idempotency) để không trigger báo động 2 lần cho cùng 1 sự kiện.
-- Resolution: Accepted
-- Rationale: Đảm bảo tính nhất quán dữ liệu là trách nhiệm của Consumer khi đọc từ Queue.
-- Impact: Provider cam kết luôn gửi kèm `eventId` (UUID v4) độc nhất cho mỗi sự kiện. Consumer sử dụng `eventId` này làm Idempotency Key (lưu Redis cache 5 phút) để check trùng.
+- Event: `sensor.reading.created`
+- Concern: Consumer có thể quen với tên event kiểu `sensor.reading.new`. Nếu đặt tên khác, Core Business sẽ không nhận được event.
+- Proposal: Thống nhất format `sensor.<noun>.<verb>` với verb ở past participle. Version event bằng semver suffix (`.v1`).
+- Resolution: **Accepted**
+- Rationale: Quy tắc đặt tên nhất quán giúp developer dễ đoán event name, giảm lỗi subscribe sai topic.
+- Impact: Core Business subscribe đúng topic `sensor.reading.created`.
 
----
-
-## Issue #4
-
-- Raised by: Consumer (Core Business)
-- Endpoint: Topic `sensor.reading.created`
-- Concern: Nếu hệ thống queue bị nghẽn (backpressure), Core Business có thể đọc được dữ liệu nhiệt độ đã diễn ra từ 10 phút trước (Stale data), việc phát cảnh báo lúc này không còn ý nghĩa và gây nhiễu.
-- Proposal: Consumer sẽ chủ động drop (bỏ qua) các event có độ trễ quá lớn.
-- Resolution: Accepted
-- Rationale: Cảnh báo Smart Campus yêu cầu tính thời gian thực (Real-time). Dữ liệu cũ chỉ có tác dụng thống kê (Analytics) chứ không dùng để chạy Policy nghiệp vụ.
-- Impact: Thống nhất logic: `CurrentTime - occurredAt > 2 phút` -> Consumer tự động drop message.
-
----
-
-## Issue #5
+## Issue #2 — Đơn vị sensor (unit) không đồng nhất
 
 - Raised by: Provider (IoT Ingestion)
-- Endpoint: Topic `sensor.reading.created`
-- Concern: Nếu format JSON từ IoT bị lỗi (do firmware thiết bị update sai) dẫn đến thiếu các field bắt buộc, việc Consumer parse lỗi có thể làm crash service Core Business.
-- Proposal: Consumer phải bắt Exception (try-catch) khi parse JSON và đẩy message lỗi sang một hàng đợi đặc biệt (Dead-letter Queue - DLQ).
-- Resolution: Accepted
-- Rationale: Đảm bảo tính Resiliency (khả năng phục hồi) cho Consumer. Broker không bị nghẽn bởi các "poison pill" (tin nhắn độc hại).
-- Impact: Chốt cơ chế DLQ sơ bộ. Chi tiết cấu hình DLQ sẽ được đặc tả rõ bằng AsyncAPI ở Lab 03.
+- Event: `sensor.reading.created`
+- Concern: Device IoT có thể gửi đơn vị khác nhau (°C vs °F). Core Business đánh giá threshold sai nếu không normalize.
+- Proposal: IoT Ingestion normalize về đơn vị SI trước khi publish. Enum hợp lệ: `°C`, `Pa`, `lux`, `ppm`, `μg/m³`, `%`. Không hợp lệ → DLQ.
+- Resolution: **Accepted**
+- Rationale: Normalize tại IoT Ingestion đảm bảo tính nhất quán. Core Business không phải tự convert.
+- Impact: Payload schema ghi rõ enum unit. Core Business nhận giá trị đã normalize.
 
----
-
-## Issue #6
+## Issue #3 — Thiếu idempotency key
 
 - Raised by: Provider (IoT Ingestion)
-- Endpoint: Topic `sensor.reading.created`
-- Concern: Tần suất gửi 1 event/giây từ hàng ngàn thiết bị sẽ tạo ra hàng trăm ngàn message, có nguy cơ làm sập Message Broker (RabbitMQ/Kafka).
-- Proposal: IoT Ingestion đề xuất gom cụm (Batching) các event lại, cứ 10 giây sẽ gửi 1 mảng (array) chứa nhiều reading thay vì gửi lẻ tẻ.
-- Resolution: Rejected (Cho Lab 02) -> Chuyển thành Issue Lab 03
-- Rationale: Việc xử lý Batching làm tăng độ phức tạp cho Consumer trong Lab 02 (phải bóc tách mảng). Hai bên thống nhất Lab 02 giữ luồng single-event để pass kiểm thử cơ bản.
-- Impact: Giữ nguyên cấu trúc JSON Object đơn. Đưa bài toán Batching vào danh sách "Issue chuyển sang Lab 03" để tiếp tục đàm phán.
+- Event: Tất cả event
+- Concern: Retry do broker/network lỗi → Core Business nhận event trùng, alert sai.
+- Proposal: Mỗi event có `eventId` (UUID v4) do IoT Ingestion sinh. Core Business dùng `eventId` deduplicate trong 24 giờ.
+- Resolution: **Accepted**
+- Rationale: `eventId` là cách phổ biến nhất xử lý duplicate.
+- Impact: Core Business thêm logic deduplicate theo `eventId`.
 
----
+## Issue #4 — Thiếu correlationId cho trace
 
-# Chốt hợp đồng v1.0
+- Raised by: Provider (IoT Ingestion)
+- Event: `sensor.threshold.exceeded`
+- Concern: Core Business nhận `threshold.exceeded` nhưng không trace về event `sensor.reading.created` gốc.
+- Proposal: Mỗi event có `correlationId`. Luồng `sensor.reading.created` → `sensor.threshold.exceeded` kế thừa cùng `correlationId`. Nếu không có → IoT Ingestion tự sinh UUID.
+- Resolution: **Accepted**
+- Rationale: Correlation ID giúp trace toàn bộ luồng xử lý từ device → IoT → Core Business.
+- Impact: IoT Ingestion truyền `correlationId` giữa các event trong luồng.
 
-Provider sign-off: Nguyễn Xuân Phúc (Đại diện IoT Ingestion)
-Consumer sign-off: ... (Đại diện Core Business)
-Witness (GV/TA): [Để trống cho Giảng Viên ký]
+## Issue #5 — Retention và DLQ policy
+
+- Raised by: Provider (IoT Ingestion)
+- Event: Tất cả event
+- Concern: Payload lỗi → drop im lặng (mất dữ liệu) hoặc retry vô hạn (infinite loop).
+- Proposal: Phân loại lỗi: (1) parse JSON → DLQ với `errorType: "parse_error"`; (2) thiếu required field → `errorType: "missing_field"`; (3) giá trị không hợp lệ → `errorType: "invalid_value"`. Retry tối đa 3 lần (1s, 2s, 4s). Retention DLQ: 7 ngày.
+- Resolution: **Accepted**
+- Rationale: DLQ tách biệt lỗi khỏi luồng chính, giúp DevOps investigate mà không block hệ thống.
+- Impact: IoT Ingestion cấu hình DLQ `campus.iot.dlq` và retry policy.
+
+### Pair 05 — Chốt hợp đồng v1.0
+
+Provider sign-off (B1 — IoT Ingestion): **Nguyễn Phúc**  
+Consumer sign-off (B6 — Core Business): **Mạnh Cường**  
+Witness:    
 Date: 2026-05-18
 
 ---
 
-## Ghi chú warning nếu Spectral còn cảnh báo
+# PHẦN B — Pair 06 (IoT Ingestion → Analytics)
 
-_(Ghi chú: Vì cặp dependency này sử dụng Queue async, Lab 02 chưa yêu cầu viết OpenAPI 3.1 nên không chạy tool kiểm tra Spectral. Bảng dưới đây dùng để ghi nhận các cảnh báo liên quan đến validation schema chuẩn bị cho AsyncAPI ở Lab 03)._
+- Consumer: Analytics (B5)
+- Trạng thái: **Đã chốt**
 
-| Warning                                  | Lý do chấp nhận tạm thời                                                  | Kế hoạch sửa                                                                    |
-| ---------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Thiếu chuẩn hóa kiểu dữ liệu cho `value` | Lab 02 thống nhất bằng văn bản tạm thời. Chưa dùng tool chặn strict type. | Lab 03 sẽ viết AsyncAPI mô tả rõ `value` là `number (float)` thay vì `string`.  |
-| Thiếu giới hạn enum cho `sensorType`     | Hiện tại chấp nhận mọi chuỗi string do IoT gửi lên.                       | Lab 03 sẽ viết AsyncAPI giới hạn enum: `["temperature", "humidity", "motion"]`. |
+## Issue #1 — Tên event không thống nhất
+
+- Raised by: Provider (IoT Ingestion)
+- Event: `telemetry.ingested`
+- Concern: Analytics có thể quen với tên event kiểu `sensor.telemetry.new`. Nếu đặt tên khác, Analytics sẽ không nhận được event.
+- Proposal: Thống nhất format `sensor.<noun>.<verb>` với past participle. Semver suffix (`.v1`).
+- Resolution: **Accepted**
+- Rationale: Quy tắc đặt tên nhất quán giúp developer dễ đoán event name.
+- Impact: Analytics subscribe đúng topic `telemetry.ingested`.
+
+## Issue #2 — Đơn vị sensor (unit) không đồng nhất
+
+- Raised by: Provider (IoT Ingestion)
+- Event: `telemetry.ingested`
+- Concern: Analytics aggregate sai giá trị nếu device gửi đơn vị khác nhau.
+- Proposal: IoT Ingestion normalize về SI. Enum hợp lệ: `°C`, `Pa`, `lux`, `ppm`, `μg/m³`, `%`. Không hợp lệ → DLQ.
+- Resolution: **Accepted**
+- Rationale: Normalize tại IoT Ingestion đảm bảo tính nhất quán.
+- Impact: Payload schema ghi rõ enum unit.
+
+## Issue #3 — Thiếu idempotency key
+
+- Raised by: Provider (IoT Ingestion)
+- Event: Tất cả event
+- Concern: Retry → Analytics aggregate sai vì nhận event trùng.
+- Proposal: Mỗi event có `eventId` (UUID v4). Analytics dùng `eventId` deduplicate trong 24 giờ.
+- Resolution: **Accepted**
+- Rationale: `eventId` xử lý duplicate phổ biến nhất.
+- Impact: Analytics thêm logic deduplicate.
+
+## Issue #4 — Batch event hay event đơn?
+
+- Raised by: Consumer (Analytics)
+- Event: `telemetry.ingested`
+- Concern: Analytics muốn event đơn để aggregate realtime, nhưng IoT Ingestion có thể gửi batch.
+- Proposal: V1 (Lab 02): chỉ event đơn, mỗi event publish riêng. `batchId` thêm vào payload như optional field để chuẩn bị V2.
+- Resolution: **Accepted**
+- Rationale: Lab 02 giữ đơn giản. `batchId` optional không phá backward compatibility.
+- Impact: Analytics chỉ handle event đơn V1.
+
+## Issue #5 — Retention và DLQ policy
+
+- Raised by: Provider (IoT Ingestion)
+- Event: Tất cả event
+- Concern: Payload lỗi → drop im lặng hoặc retry vô hạn.
+- Proposal: Phân loại lỗi: parse error / missing field / invalid value → DLQ `campus.iot.dlq`. Retry 3 lần (1s, 2s, 4s). Retention 7 ngày.
+- Resolution: **Accepted**
+- Rationale: DLQ tách biệt lỗi khỏi luồng chính.
+- Impact: IoT Ingestion cấu hình DLQ và retry.
+
+## Issue #6 — Event out-of-order
+
+- Raised by: Consumer (Analytics)
+- Event: `telemetry.ingested`
+- Concern: Event có thể đến không đúng thứ tự timestamp do network latency. Analytics aggregate sai nếu không sort.
+- Proposal: Mỗi event có `timestamp` (ISO 8601, UTC). Analytics sort theo `timestamp` trước khi aggregate. IoT Ingestion ghi timestamp tại thời điểm device gửi.
+- Resolution: **Accepted**
+- Rationale: `timestamp` từ device đảm bảo thứ tự thực tế.
+- Impact: Analytics cần logic sort theo `timestamp`.
+
+### Pair 06 — Chốt hợp đồng v1.0
+
+Provider sign-off (B1 — IoT Ingestion): **Nguyễn Phúc**  
+Consumer sign-off (B5 — Analytics): **Lương Hương**  
+Witness:    
+Date: 2026-05-18
