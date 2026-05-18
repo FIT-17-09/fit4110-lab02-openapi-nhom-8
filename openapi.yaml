@@ -79,18 +79,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Alert'
-              examples:
-                created:
-                  value:
-                    id: 0196fb3d-4ad7-7d1e-9f49-5d5148d2babc
-                    sourceService: core-business
-                    alertType: UNAUTHORIZED_ACCESS
-                    severity: HIGH
-                    message: Phát hiện truy cập trái phép tại cổng chính
-                    relatedEventId: 0196fb3d-4ad7-7d1e-9f49-5d5148d2babc
-                    status: OPEN
-                    createdAt: '2026-05-10T08:00:00Z'
-                    resolvedAt: null
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -115,21 +103,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AlertPage'
-              examples:
-                firstPage:
-                  value:
-                    items:
-                      - id: 0196fb3d-4ad7-7d1e-9f49-5d5148d2babc
-                        sourceService: core-business
-                        alertType: UNAUTHORIZED_ACCESS
-                        severity: HIGH
-                        message: Phát hiện truy cập trái phép tại cổng chính
-                        relatedEventId: 0196fb3d-4ad7-7d1e-9f49-5d5148d2babc
-                        status: OPEN
-                        createdAt: '2026-05-10T08:00:00Z'
-                        resolvedAt: null
-                    nextCursor: null
-                    hasMore: false
         '401':
           $ref: '#/components/responses/Unauthorized'
         '500':
@@ -538,7 +511,7 @@ components:
           type: [string, 'null']
           format: uri
           description: URI của request gây lỗi.
-          example: /alerts
+          example: https://campus.local/alerts
         errors:
           type: array
           minItems: 0
@@ -576,7 +549,7 @@ components:
             title: Dữ liệu không hợp lệ
             status: 400
             detail: Payload không đúng JSON Schema
-            instance: /alerts
+            instance: https://campus.local/alerts
             errors:
               - field: alertType
                 code: ENUM_MISMATCH
@@ -593,7 +566,7 @@ components:
             title: Chưa xác thực
             status: 401
             detail: Thiếu Bearer token
-            instance: /alerts/recent
+            instance: https://campus.local/alerts/recent
             errors: []
 
     Forbidden:
